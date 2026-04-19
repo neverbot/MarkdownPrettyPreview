@@ -1,0 +1,16 @@
+MarkdownPrettyPreview
+=====================
+
+Thanks for installing!
+
+Open any Markdown file and run "Markdown Pretty Preview: Open" from the
+command palette, or press:
+
+    super+alt+m   (macOS)
+    ctrl+alt+m    (Linux/Windows)
+
+Settings live under:
+
+    Preferences → Package Settings → Markdown Pretty Preview → Settings
+
+Source & issues: https://github.com/neverbot/MarkdownPrettyPreview

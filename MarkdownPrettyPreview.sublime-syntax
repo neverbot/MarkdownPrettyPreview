@@ -1,0 +1,185 @@
+%YAML 1.2
+---
+# MarkdownPrettyPreview preview syntax.
+#
+# Sentinels: each inline kind has a distinct open/close pair of zero-width
+# chars, so the prototype's push rules (all OPEN chars) never collide with a
+# context's own pop rule (its CLOSE char). Uniform nesting works as a stack.
+#
+# Code blocks: rendered between double-line ═ banners with no side borders,
+# so we can embed the language's scope in one shot from top banner to
+# bottom banner. The embedded tokenizer sees a clean stream of code ->
+# multi-line constructs (triple-quoted strings, /* ... */ comments) work
+# correctly. ═ (double) differs from ─ (single, used by tables and HRs)
+# so the banners remain visually distinct.
+name: MPP Preview
+scope: text.html.markdown.mpp
+version: 2
+hidden: true
+
+variables:
+  open_bold:    '\x{200B}'
+  close_bold:   '\x{200C}'
+  open_italic:  '\x{200D}'
+  close_italic: '\x{2060}'
+  open_strike:  '\x{2061}'
+  close_strike: '\x{2062}'
+  open_code:    '\x{2063}'
+  close_code:   '\x{2064}'
+  open_link:    '\x{2066}'
+  close_link:   '\x{2069}'
+
+contexts:
+  prototype:
+    - match: '{{open_bold}}'
+      push: mpp_bold
+    - match: '{{open_italic}}'
+      push: mpp_italic
+    - match: '{{open_strike}}'
+      push: mpp_strike
+    - match: '{{open_code}}'
+      push: mpp_code
+    - match: '{{open_link}}'
+      push: mpp_link
+
+  main:
+    - match: '^#{1,6}\s+.*$'
+      scope: markup.heading.markdown
+    - match: '^━{3,}$'
+      scope: markup.heading.1.markdown
+    - match: '^─{3,}$'
+      scope: markup.heading.2.markdown
+
+    - match: '^╒═+╡ (?:python|py) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.python
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:javascript|js) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.js
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:typescript|ts) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.ts
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ c ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.c
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:cpp|c\+\+) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.c++
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:rust|rs) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.rust
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ go ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.go
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:ruby|rb) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.ruby
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ java ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.java
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ php ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.php
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:shell|sh|bash|zsh) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.shell.bash
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ html ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:text.html.basic
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:css|scss) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.css
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ json ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.json
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:yaml|yml) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.yaml
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ sql ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.sql
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+
+    # Generic fallback (no language declared). Top banner ╒═+╕ opens,
+    # bottom banner ╘═+╛ closes. Must come AFTER language rules so they win.
+    - match: '^╒═+╕\s*$'
+      scope: markup.raw.block.markdown
+      push: mpp_code_block_plain
+
+  mpp_code_block_plain:
+    - meta_scope: markup.raw.block.markdown
+    - match: '^╘═+╛\s*$'
+      scope: markup.raw.block.markdown
+      pop: true
+
+  mpp_bold:
+    - meta_scope: markup.bold.markdown
+    - match: '{{close_bold}}'
+      pop: true
+
+  mpp_italic:
+    - meta_scope: markup.italic.markdown
+    - match: '{{close_italic}}'
+      pop: true
+
+  mpp_strike:
+    - meta_scope: markup.strikethrough.markdown
+    - match: '{{close_strike}}'
+      pop: true
+
+  mpp_code:
+    - meta_scope: markup.raw.inline.markdown
+    - match: '{{close_code}}'
+      pop: true
+
+  mpp_link:
+    - meta_scope: markup.underline.link.markdown
+    - match: '{{close_link}}'
+      pop: true

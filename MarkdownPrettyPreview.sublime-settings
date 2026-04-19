@@ -1,0 +1,22 @@
+{
+    // Milliseconds to wait after a change before updating the preview.
+    // Higher values reduce flicker on large documents at the cost of latency.
+    "debounce_ms": 100,
+
+    // Where to place the preview view.
+    //   true  -> open as a new tab in the same group as the source
+    //            (VSCode-style: switch between source/preview tabs).
+    //   false -> open in a separate group to the right, forcing a 2-column
+    //            layout if the window has only one (side-by-side live view).
+    "preview_in_same_group": true,
+
+    // Prefix every line inside a fenced code block with a single space so
+    // the code is visually detached from the ╒═╕ / ╘═╛ banners. Banners
+    // extend by one char to cover it. Safe for all supported languages.
+    "code_block_leading_space": true,
+
+    // Insert an empty row between each data row in tables for extra
+    // breathing room. The empty row keeps the │ borders so table shape
+    // stays intact; it just leaves the cells blank.
+    "table_row_spacing": true
+}
