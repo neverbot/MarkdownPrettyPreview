@@ -28,6 +28,7 @@ variables:
   close_code:   '\x{2064}'
   open_link:    '\x{2066}'
   close_link:   '\x{2069}'
+  heading:      '\x{FEFF}'
 
 contexts:
   prototype:
@@ -43,8 +44,10 @@ contexts:
       push: mpp_link
 
   main:
-    - match: '^#{1,6}\s+.*$'
-      scope: markup.heading.markdown
+    # Heading text lines start with the heading sentinel. Pushing (rather
+    # than matching the whole line) lets inline sentinels nest inside.
+    - match: '^{{heading}}'
+      push: mpp_heading_line
     - match: '^━{3,}$'
       scope: markup.heading.1.markdown
     - match: '^─{3,}$'
@@ -65,6 +68,18 @@ contexts:
     - match: '^╒═+╡ (?:typescript|ts) ╞═+╕\s*$'
       scope: markup.raw.block.markdown
       embed: scope:source.ts
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ jsx ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.jsx
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ tsx ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.tsx
       escape: '^╘═+╛\s*$'
       escape_captures:
         0: markup.raw.block.markdown
@@ -146,15 +161,46 @@ contexts:
       escape: '^╘═+╛\s*$'
       escape_captures:
         0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:diff|patch) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.diff
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ xml ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:text.xml
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ lua ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.lua
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
+    - match: '^╒═+╡ (?:csharp|cs|c#) ╞═+╕\s*$'
+      scope: markup.raw.block.markdown
+      embed: scope:source.cs
+      escape: '^╘═+╛\s*$'
+      escape_captures:
+        0: markup.raw.block.markdown
 
-    # Generic fallback (no language declared). Top banner ╒═+╕ opens,
-    # bottom banner ╘═+╛ closes. Must come AFTER language rules so they win.
-    - match: '^╒═+╕\s*$'
+    # Generic fallback: no language declared (╒═+╕), or one we don't embed
+    # (╒═╡ toml ╞═╕). Bottom banner ╘═+╛ closes. Must come AFTER language
+    # rules so they win.
+    - match: '^╒═+(?:╡ .* ╞═+)?╕\s*$'
       scope: markup.raw.block.markdown
       push: mpp_code_block_plain
 
+  mpp_heading_line:
+    - meta_scope: markup.heading.markdown
+    - match: '$'
+      pop: true
+
   mpp_code_block_plain:
     - meta_scope: markup.raw.block.markdown
+    - meta_include_prototype: false
     - match: '^╘═+╛\s*$'
       scope: markup.raw.block.markdown
       pop: true

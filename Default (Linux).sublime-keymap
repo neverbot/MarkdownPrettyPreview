@@ -5,5 +5,13 @@
         "context": [
             { "key": "selector", "operator": "equal", "operand": "text.html.markdown" }
         ]
+    },
+    {
+        // From the preview, jump back to its source.
+        "keys": ["ctrl+alt+m"],
+        "command": "open_markdown_pretty_preview",
+        "context": [
+            { "key": "setting.mpp_is_preview", "operator": "equal", "operand": true }
+        ]
     }
 ]

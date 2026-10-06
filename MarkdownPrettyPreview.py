@@ -38,12 +38,16 @@ This plugin runs entirely locally. It does not open network connections
 or read files outside the source view it was opened against.
 """
 
+import os
+import re
+
 import sublime
 import sublime_plugin
-import re
 
 PREVIEW_OF = "mpp_preview_of"
 HAS_PREVIEW = "mpp_has_preview"
+PREVIEW_OF_FILE = "mpp_preview_of_file"
+IS_PREVIEW = "mpp_is_preview"
 SETTINGS_FILE = "MarkdownPrettyPreview.sublime-settings"
 PREVIEW_SYNTAX = "Packages/MarkdownPrettyPreview/MarkdownPrettyPreview.sublime-syntax"
 
@@ -59,6 +63,16 @@ KIND_MARKS = {
     'code':   ('\u2063', '\u2064'),  # INVISIBLE SEPARATOR / INVISIBLE PLUS
     'link':   ('\u2066', '\u2069'),  # LRI / PDI (bidi, hidden via draw_unicode_bidi)
 }
+
+# Line-start sentinel for heading text. The syntax scopes everything from
+# it to end of line as a heading; inline sentinels still nest inside.
+HEADING_MARK = '\ufeff'  # ZERO WIDTH NO-BREAK SPACE
+
+# Sublime color schemes have no strikethrough font style, so a scope alone
+# can't draw a line through text. Instead every struck character gets a
+# combining long stroke overlay appended. It is zero-width, so it is added
+# only after all layout math (wrapping, padding) has been done on plain text.
+STRIKE_OVERLAY = '\u0336'  # COMBINING LONG STROKE OVERLAY
 
 
 def get_setting(key, default):
@@ -81,6 +95,51 @@ INLINE_PATTERNS = [
 ]
 
 
+ESCAPABLE = set('\\`*_{}[]()#+-.!~|<>')
+ESCAPE_BASE = 0xE000  # Private Use Area: escaped chars hide here while parsing
+
+
+def hide_escapes(text):
+    """Replace ``\\X`` (X escapable punctuation) with a private-use char.
+
+    The placeholder can't match any inline pattern, so ``\\*literal\\*``
+    stays literal. Code spans are copied verbatim: backslash escapes do not
+    apply inside them. ``reveal_escapes`` maps placeholders back to ``X``.
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '\\' and i + 1 < n and text[i + 1] in ESCAPABLE:
+            out.append(chr(ESCAPE_BASE + ord(text[i + 1])))
+            i += 2
+            continue
+        if c == '`':
+            m = CODE_SPAN_RE.match(text, i)
+            if m:
+                out.append(m.group(0))
+                i = m.end()
+                continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def reveal_escapes(text):
+    return ''.join(
+        chr(ord(c) - ESCAPE_BASE) if ESCAPE_BASE <= ord(c) < ESCAPE_BASE + 128 else c
+        for c in text
+    )
+
+
+CODE_SPAN_RE = INLINE_PATTERNS[0][1]
+
+
+def _overlaps_code(runs, lo, hi):
+    """True if ``[lo, hi)`` intersects the content of any code run."""
+    return any(k == 'code' and s < hi and lo < e for s, e, k in runs)
+
+
 def parse_inline(text):
     """Strip Markdown inline markers and return ``(plain, runs)``.
 
@@ -88,10 +147,12 @@ def parse_inline(text):
     ``(start, end, kind)`` tuples in coordinates of ``plain``. The scanner
     repeatedly picks the earliest match across all patterns, so outer
     constructs (``**bold with *italic* inside**``) resolve before inner
-    ones, yielding properly nested runs.
+    ones, yielding properly nested runs. Code span content is literal:
+    a match whose markers fall inside an already-resolved code run is
+    skipped.
     """
     runs = []
-    plain = text
+    plain = hide_escapes(text)
 
     def map_pos(p, ms, cs, ce, me):
         # Translate a position in the pre-strip string to the post-strip
@@ -109,16 +170,33 @@ def parse_inline(text):
             return ms + (ce - cs)
         return p - ((cs - ms) + (me - ce))
 
+    def first_valid(pat):
+        pos = 0
+        while True:
+            m = pat.search(plain, pos)
+            if not m:
+                return None
+            if not (_overlaps_code(runs, m.start(), m.start(1))
+                    or _overlaps_code(runs, m.end(1), m.end())):
+                return m
+            pos = m.start() + 1
+
+    # Code spans bind tighter than any emphasis, so resolve them all first;
+    # later patterns then see their content as protected.
+    phases = [INLINE_PATTERNS[:1], INLINE_PATTERNS[1:]]
     while True:
         best = None
-        for kind, pat in INLINE_PATTERNS:
-            m = pat.search(plain)
+        for kind, pat in phases[0]:
+            m = first_valid(pat)
             if not m:
                 continue
             if best is None or m.start() < best[0]:
                 best = (m.start(), m.end(), m.start(1), m.end(1), kind)
         if best is None:
-            return plain, runs
+            phases.pop(0)
+            if not phases:
+                return reveal_escapes(plain), runs
+            continue
 
         ms, me, cs, ce, kind = best
         content = plain[cs:ce]
@@ -141,9 +219,19 @@ def inject_sentinels(text, runs):
       - among simultaneous closes, INNER (larger start) closes first;
       - among simultaneous opens, OUTER (larger end) opens first.
     This keeps nesting like ``**bold *italic* tail**`` well-formed.
+
+    Text inside strike runs also gets ``STRIKE_OVERLAY`` after each char.
     """
     if not runs:
         return text
+
+    strike_depth = 0
+
+    def segment(s):
+        if strike_depth and s:
+            return ''.join(c + STRIKE_OVERLAY for c in s)
+        return s
+
     events = []
     for s, e, k in runs:
         # Tuple: (pos, phase, tiebreak, kind, is_open).
@@ -157,11 +245,13 @@ def inject_sentinels(text, runs):
     parts = []
     last = 0
     for pos, _, _, k, is_open in events:
-        parts.append(text[last:pos])
+        parts.append(segment(text[last:pos]))
         o, c = KIND_MARKS[k]
         parts.append(o if is_open else c)
+        if k == 'strike':
+            strike_depth += 1 if is_open else -1
         last = pos
-    parts.append(text[last:])
+    parts.append(segment(text[last:]))
     return ''.join(parts)
 
 
@@ -262,10 +352,12 @@ def restrict_runs(runs, start, end):
 
 SEPARATOR_RE = re.compile(r'^\s*\|?\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)*\s*\|?\s*$')
 FENCE_RE = re.compile(r'^\s*(```|~~~)')
-FENCE_OPEN_RE = re.compile(r'^\s*(```|~~~)\s*(.*)$')
-HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*#*\s*$')
+FENCE_OPEN_RE = re.compile(r'^\s*(`{3,}|~{3,})\s*(.*)$')
+# Closing ``#`` run only counts when preceded by whitespace (``# C#`` keeps it).
+HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$')
 HR_RE = re.compile(r'^\s*(\*\s*\*\s*\*[\s*]*|-\s*-\s*-[\s-]*|_\s*_\s*_[\s_]*)\s*$')
 TASK_RE = re.compile(r'^(\s*)[-*+]\s+\[([ xX])\]\s*(.*)$')
+LIST_RE = re.compile(r'^(\s*(?:[-*+]|\d{1,9}[.)])\s+)(.*)$')
 BLOCKQUOTE_RE = re.compile(r'^(\s*)((?:>\s?)+)(.*)$')
 
 
@@ -273,15 +365,37 @@ def split_row(line):
     """Split a Markdown table row into a list of trimmed cell strings.
 
     Leading/trailing pipes are stripped so ``| a | b |`` and ``a | b`` both
-    yield ``['a', 'b']``. Does not handle escaped pipes inside cells (rare
-    in practice).
+    yield ``['a', 'b']``. Escaped pipes (``\\|``) and pipes inside code
+    spans don't split; ``\\|`` is kept for ``parse_inline`` to unescape.
     """
     s = line.strip()
     if s.startswith('|'):
         s = s[1:]
-    if s.endswith('|'):
+    if s.endswith('|') and not s.endswith('\\|'):
         s = s[:-1]
-    return [c.strip() for c in s.split('|')]
+    cells = []
+    cur = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == '\\' and i + 1 < n:
+            cur.append(s[i:i + 2])
+            i += 2
+            continue
+        if c == '`':
+            m = CODE_SPAN_RE.match(s, i)
+            if m:
+                cur.append(m.group(0))
+                i = m.end()
+                continue
+        if c == '|':
+            cells.append(''.join(cur).strip())
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    cells.append(''.join(cur).strip())
+    return cells
 
 
 def parse_alignments(separator_line):
@@ -338,10 +452,15 @@ def transform_heading(line, max_width):
         return None
     level = len(m.group(1))
     if level > 2:
-        plain, runs = parse_inline(line)
-        return wrap_line_with_prefix(plain, runs, max_width)
+        plain, runs = parse_inline(m.group(2))
+        prefix = m.group(1) + ' '
+        lines = wrap_line_with_prefix(plain, runs, max_width, prefix, ' ' * len(prefix))
+        return [HEADING_MARK + ln for ln in lines]
     title_plain, title_runs = parse_inline(m.group(2))
-    title_lines = wrap_line_with_prefix(title_plain, title_runs, max_width)
+    title_lines = [
+        HEADING_MARK + ln
+        for ln in wrap_line_with_prefix(title_plain, title_runs, max_width)
+    ]
     # Underline length mirrors the visible title width but never exceeds the
     # viewport -- so long H1/H2 titles don't force horizontal scroll.
     underline_width = max(3, min(len(title_plain), max_width))
@@ -383,6 +502,33 @@ def transform_blockquote(line, max_width):
     prefix = indent + ('▌ ' * depth)
     rest_plain, rest_runs = parse_inline(rest)
     return wrap_line_with_prefix(rest_plain, rest_runs, max_width, prefix)
+
+
+def transform_list_item(line, max_width):
+    """Render a bullet or ordered list item with a hanging indent.
+
+    The marker is kept as-is; wrapped continuation lines align under the
+    item text instead of falling back to column 0. Returns ``None`` if the
+    line is not a list item.
+    """
+    m = LIST_RE.match(line)
+    if not m:
+        return None
+    marker = m.group(1)
+    plain, runs = parse_inline(m.group(2))
+    return wrap_line_with_prefix(plain, runs, max_width, marker, ' ' * len(marker))
+
+
+def transform_paragraph(line, max_width):
+    """Render a plain line, keeping its leading indentation on every
+    wrapped visual line."""
+    plain, runs = parse_inline(line)
+    stripped = plain.lstrip(' ')
+    indent = len(plain) - len(stripped)
+    if not indent:
+        return wrap_line_with_prefix(plain, runs, max_width)
+    runs = restrict_runs(runs, indent, len(plain))
+    return wrap_line_with_prefix(stripped, runs, max_width, ' ' * indent)
 
 
 def transform_hr(line, width):
@@ -589,13 +735,16 @@ def transform_markdown(text, max_width=80, opts=None):
 
         fence_m = FENCE_OPEN_RE.match(line)
         if fence_m:
-            fence_char = fence_m.group(1)
+            fence = fence_m.group(1)
             info = fence_m.group(2).strip()
-            lang = info.split()[0] if info else ''
+            lang = info.split()[0].lower() if info else ''
+            # A fence closes only on a run of the same char at least as long
+            # (so ```` can wrap a block that itself contains ```).
+            close_re = re.compile(r'^\s*' + re.escape(fence[0]) + r'{%d,}\s*$' % len(fence))
             i += 1
             code_lines = []
             while i < len(lines):
-                if lines[i].lstrip().startswith(fence_char):
+                if close_re.match(lines[i]):
                     i += 1
                     break
                 code_lines.append(lines[i])
@@ -647,8 +796,13 @@ def transform_markdown(text, max_width=80, opts=None):
             i += 1
             continue
 
-        plain, runs = parse_inline(line)
-        out.extend(wrap_line_with_prefix(plain, runs, max_width))
+        item = transform_list_item(line, max_width)
+        if item is not None:
+            out.extend(item)
+            i += 1
+            continue
+
+        out.extend(transform_paragraph(line, max_width))
         i += 1
 
     return '\n'.join(out)
@@ -718,13 +872,53 @@ def viewport_char_width(view, fallback=80):
     return fallback
 
 
+def linked_preview(source_view):
+    """Return the preview paired with ``source_view``, or ``None``.
+
+    The pairing lives in view settings, which Sublime persists in the
+    session, while view ids are reassigned on every start. A stale id could
+    therefore point at an unrelated view; only trust the pair when both
+    sides agree, and drop the source's marker otherwise.
+    """
+    preview_id = source_view.settings().get(HAS_PREVIEW)
+    if not preview_id:
+        return None
+    preview = find_view_by_id(preview_id)
+    if preview and preview.settings().get(PREVIEW_OF) == source_view.id():
+        return preview
+    source_view.settings().erase(HAS_PREVIEW)
+    return None
+
+
+def linked_source(preview_view):
+    """Inverse of ``linked_preview``: the source of a preview, or ``None``."""
+    source_id = preview_view.settings().get(PREVIEW_OF)
+    if not source_id:
+        return None
+    source = find_view_by_id(source_id)
+    if source and source.settings().get(HAS_PREVIEW) == preview_view.id():
+        return source
+    return None
+
+
+def link_views(source_view, preview_view):
+    preview_view.settings().set(PREVIEW_OF, source_view.id())
+    preview_view.settings().set(PREVIEW_OF_FILE, source_view.file_name())
+    # Keymap context for the toggle-back binding.
+    preview_view.settings().set(IS_PREVIEW, True)
+    source_view.settings().set(HAS_PREVIEW, preview_view.id())
+
+
 def update_preview(source_view, preview_view):
     """Re-render the preview from the current source content.
 
     Reads the source buffer, measures the preview's viewport, gathers user
     rendering options, and runs the transform. The preview is briefly made
     writable to allow the replacement, then locked back to read-only.
+    Refuses to write unless the two views are still paired.
     """
+    if linked_preview(source_view) != preview_view:
+        return
     content = source_view.substr(sublime.Region(0, source_view.size()))
     max_width = viewport_char_width(preview_view)
     opts = {
@@ -739,7 +933,8 @@ def update_preview(source_view, preview_view):
 
 
 class MppReplaceContentCommand(sublime_plugin.TextCommand):
-    """Replace the whole preview buffer with new content, preserving the caret.
+    """Replace the whole preview buffer with new content, preserving the
+    caret and the scroll position.
 
     A plain ``view.replace`` of the full buffer leaves the entire new text
     selected, which is disruptive on every debounced update. We capture the
@@ -748,33 +943,48 @@ class MppReplaceContentCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, content):
         old_pos = self.view.sel()[0].begin() if len(self.view.sel()) else 0
+        old_viewport = self.view.viewport_position()
         self.view.replace(edit, sublime.Region(0, self.view.size()), content)
         clamped = min(old_pos, self.view.size())
         sel = self.view.sel()
         sel.clear()
         sel.add(sublime.Region(clamped, clamped))
+        self.view.set_viewport_position(old_viewport, False)
 
 
 class OpenMarkdownPrettyPreviewCommand(sublime_plugin.WindowCommand):
     """Open (or focus existing) preview for the active Markdown view.
 
-    If a preview already exists for the current view, just focus it.
-    Otherwise, create a new scratch view, wire up the source <-> preview
-    association via view settings, apply view-local settings that keep the
-    zero-width sentinels invisible, and trigger an initial render.
+    If a preview already exists for the current view, just focus it; run
+    from a preview, focus its source instead (toggle). Otherwise, create a
+    new scratch view, wire up the source <-> preview association via view
+    settings, apply view-local settings that keep the zero-width sentinels
+    invisible, and trigger an initial render.
     """
+
+    def is_enabled(self):
+        view = self.window.active_view()
+        if not view:
+            return False
+        if view.settings().get(PREVIEW_OF):
+            return True
+        return view.match_selector(0, "text.html.markdown")
 
     def run(self):
         source_view = self.window.active_view()
         if not source_view:
             return
 
-        existing_id = source_view.settings().get(HAS_PREVIEW)
-        if existing_id:
-            existing = find_view_by_id(existing_id)
-            if existing:
-                self.window.focus_view(existing)
-                return
+        if source_view.settings().get(PREVIEW_OF):
+            source = linked_source(source_view)
+            if source and source.window():
+                source.window().focus_view(source)
+            return
+
+        existing = linked_preview(source_view)
+        if existing:
+            self.window.focus_view(existing)
+            return
 
         same_group = bool(get_setting("preview_in_same_group", True))
         if same_group:
@@ -788,7 +998,7 @@ class OpenMarkdownPrettyPreviewCommand(sublime_plugin.WindowCommand):
         preview_view = self.window.new_file()
         preview_view.set_scratch(True)
         source_name = source_view.file_name() or "untitled"
-        preview_view.set_name("Preview: " + source_name.split('/')[-1])
+        preview_view.set_name("Preview: " + os.path.basename(source_name))
         preview_view.assign_syntax(PREVIEW_SYNTAX)
 
         preview_view.settings().set("word_wrap", False)
@@ -800,8 +1010,7 @@ class OpenMarkdownPrettyPreviewCommand(sublime_plugin.WindowCommand):
         preview_view.settings().set("draw_white_space", "none")
         preview_view.settings().set("draw_unicode_bidi", False)
 
-        preview_view.settings().set(PREVIEW_OF, source_view.id())
-        source_view.settings().set(HAS_PREVIEW, preview_view.id())
+        link_views(source_view, preview_view)
 
         update_preview(source_view, preview_view)
         preview_view.set_read_only(True)
@@ -847,41 +1056,35 @@ class MppListener(sublime_plugin.EventListener):
         # When the preview regains focus, re-render if the viewport size
         # has changed since we last drew (e.g. user resized the window or
         # dragged the group divider).
-        source_id = view.settings().get(PREVIEW_OF)
-        if not source_id:
+        source = linked_source(view)
+        if not source:
             return
         current = viewport_char_width(view)
         last = _last_viewport_width.get(view.id())
         if last == current:
             return
-        source = find_view_by_id(source_id)
-        if source:
-            update_preview(source, view)
+        update_preview(source, view)
 
     def on_close(self, view):
         # Closing the source closes its preview too (and vice versa cleans
         # up the source's HAS_PREVIEW marker), keeping the pair consistent.
-        preview_id = view.settings().get(HAS_PREVIEW)
-        if preview_id:
-            preview = find_view_by_id(preview_id)
-            if preview:
-                win = preview.window()
-                if win:
-                    win.focus_view(preview)
-                    win.run_command("close_file")
-        source_id = view.settings().get(PREVIEW_OF)
-        if source_id:
-            source = find_view_by_id(source_id)
-            if source:
-                source.settings().erase(HAS_PREVIEW)
+        preview = linked_preview(view)
+        if preview:
+            preview.close()
+        source = linked_source(view)
+        if source:
+            source.settings().erase(HAS_PREVIEW)
         _debounce_epochs.pop(view.id(), None)
         _last_viewport_width.pop(view.id(), None)
 
 
 _POLL_INTERVAL_MS = 500
+# Identity of the running poll loop. Reset on unload so a reloaded module
+# doesn't leave the previous module's loop running alongside the new one.
+_poll_token = None
 
 
-def _poll_viewport_sizes():
+def _poll_viewport_sizes(token):
     """Periodic check so live resizes redraw without needing focus change.
 
     ``on_activated_async`` only fires when the preview regains focus, but
@@ -889,6 +1092,8 @@ def _poll_viewport_sizes():
     poll (default 500 ms) re-renders any preview whose viewport width has
     changed, then reschedules itself.
     """
+    if token is not _poll_token:
+        return
     for preview_id, last_w in list(_last_viewport_width.items()):
         preview = find_view_by_id(preview_id)
         if not preview:
@@ -897,15 +1102,59 @@ def _poll_viewport_sizes():
         current = viewport_char_width(preview)
         if current == last_w:
             continue
-        source_id = preview.settings().get(PREVIEW_OF)
-        if source_id is None:
-            continue
-        source = find_view_by_id(source_id)
+        source = linked_source(preview)
         if source:
             update_preview(source, preview)
-    sublime.set_timeout_async(_poll_viewport_sizes, _POLL_INTERVAL_MS)
+    sublime.set_timeout_async(lambda: _poll_viewport_sizes(token), _POLL_INTERVAL_MS)
+
+
+def _restore_pairs():
+    """Re-pair previews restored from a previous session (or survive a
+    plugin reload).
+
+    Pairs whose ids still agree are kept. Otherwise every source marker is
+    dropped, and each preview is re-linked to the view showing its source
+    file in the same window, or closed if there is none.
+    """
+    for window in sublime.windows():
+        views = window.views()
+        previews = [v for v in views if v.settings().get(PREVIEW_OF)]
+        intact = set()
+        for p in previews:
+            s = linked_source(p)
+            if s:
+                intact.add(p.id())
+                intact.add(s.id())
+                update_preview(s, p)
+        for v in views:
+            if v.id() not in intact:
+                v.settings().erase(HAS_PREVIEW)
+        for p in previews:
+            if p.id() in intact:
+                continue
+            path = p.settings().get(PREVIEW_OF_FILE)
+            source = next(
+                (v for v in views
+                 if path and v.file_name() == path and not v.settings().get(HAS_PREVIEW)),
+                None,
+            )
+            if source:
+                link_views(source, p)
+                update_preview(source, p)
+            else:
+                p.close()
 
 
 def plugin_loaded():
-    """Sublime calls this after the package is loaded; kicks off the poll."""
-    sublime.set_timeout_async(_poll_viewport_sizes, _POLL_INTERVAL_MS)
+    """Sublime calls this after the package is loaded: repair pairings left
+    over from a previous session, then kick off the resize poll."""
+    global _poll_token
+    _restore_pairs()
+    _poll_token = object()
+    token = _poll_token
+    sublime.set_timeout_async(lambda: _poll_viewport_sizes(token), _POLL_INTERVAL_MS)
+
+
+def plugin_unloaded():
+    global _poll_token
+    _poll_token = None

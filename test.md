@@ -384,4 +384,36 @@ Empty code block:
 ```
 ```
 
+## Regression cases
+
+Strikethrough must show a line: ~~struck text~~, and ~~struck with **bold** inside~~.
+
+Code is literal: `__init__`, `ls *.py *.md`, `a ~~b~~ c`.
+
+Escapes stay literal: \*not italic\*, \_not italic\_, \~\~not struck\~\~.
+
+### Heading with **bold** and a long tail that should wrap across several visual lines when the pane is narrow
+
+# Learn C#
+
+- A long bullet item whose text must wrap and keep a hanging indent so the continuation lines align under the text, not under the dash
+  1. A nested ordered item that also wraps across lines and keeps its continuation aligned under the text after the number marker
+
+    An indented paragraph line that is long enough to wrap and should keep its four-space indentation on every wrapped visual line.
+
+| Pipes | In cells |
+| ----- | -------- |
+| `a|b` | x \| y   |
+
+```toml
+# comment, not a heading
+key = "value"
+```
+
+````md
+```py
+print("nested fence")
+```
+````
+
 End of test file.
