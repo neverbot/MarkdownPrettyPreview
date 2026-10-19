@@ -116,6 +116,20 @@ class BlockTests(unittest.TestCase):
         self.assertIn('x|y', out)
         self.assertIn('p | q', out)
 
+    def test_table_short_separators(self):
+        for sep in ('|:--|:--|', '|:--:|:--|', '|-|-|', '| - | -: |'):
+            out = visible(render('| a | b |\n' + sep + '\n| 1 | 2 |'))
+            self.assertIn('┌', out, sep)
+            self.assertIn('│ 1', out, sep)
+
+    def test_table_short_separator_alignment(self):
+        self.assertEqual(mpp.parse_alignments('|:--:|:--|-:|'), ['center', 'left', 'right'])
+
+    def test_pipe_line_followed_by_rule_is_not_a_table(self):
+        out = visible(render('a | b\n---\ntext', 40))
+        self.assertNotIn('┌', out)
+        self.assertIn('─' * 40, out)
+
 
 if __name__ == '__main__':
     unittest.main()

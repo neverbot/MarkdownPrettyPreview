@@ -350,7 +350,8 @@ def restrict_runs(runs, start, end):
 # Line-level transforms
 # ---------------------------------------------------------------------------
 
-SEPARATOR_RE = re.compile(r'^\s*\|?\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)*\s*\|?\s*$')
+# GFM delimiter row: one or more dashes per cell (``|:--|-:|``), optional colons.
+SEPARATOR_RE = re.compile(r'^\s*\|?\s*:?-+:?(\s*\|\s*:?-+:?)*\s*\|?\s*$')
 FENCE_RE = re.compile(r'^\s*(```|~~~)')
 FENCE_OPEN_RE = re.compile(r'^\s*(`{3,}|~{3,})\s*(.*)$')
 # Closing ``#`` run only counts when preceded by whitespace (``# C#`` keeps it).
@@ -756,6 +757,9 @@ def transform_markdown(text, max_width=80, opts=None):
             '|' in line
             and i + 1 < len(lines)
             and SEPARATOR_RE.match(lines[i + 1])
+            # Same cell count as the header, so a line with a pipe followed
+            # by a ``---`` rule isn't mistaken for a table.
+            and len(split_row(lines[i + 1])) == len(split_row(line))
         ):
             header_cells = [parse_inline(c) for c in split_row(line)]
             aligns = parse_alignments(lines[i + 1])
